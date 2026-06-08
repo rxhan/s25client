@@ -145,9 +145,19 @@ bool GameManager::Run()
         }
     } else
     {
-        videoDriver_.ClearScreen();
-        windowManager_.Draw();
-        videoDriver_.SwapBuffers();
+        // TURBO (Einzelspieler, 1ms/GF): nur ~alle 50ms zeichnen. SwapBuffers ruft
+        // den FPS-Limiter (sleepTillNextFrame) -> würde die Hauptschleife auf ~60/s
+        // deckeln und damit die GF-Rate. Durch seltenes Zeichnen dreht die Schleife
+        // schnell, und Client/Server erreichen ihre Soll-Rate (z.B. 1000 GF/s).
+        const unsigned nowMs = videoDriver_.GetTickCount();
+        const bool turboSkipDraw = GAMECLIENT.IsTurboMode() && (nowMs - lastTurboDrawMs_) < 50;
+        if(!turboSkipDraw)
+        {
+            lastTurboDrawMs_ = nowMs;
+            videoDriver_.ClearScreen();
+            windowManager_.Draw();
+            videoDriver_.SwapBuffers();
+        }
     }
     gfCounter_.update();
 

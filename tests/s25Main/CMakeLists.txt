@@ -34,6 +34,7 @@ target_link_libraries(testWorldFixtures PUBLIC s25Main PRIVATE testHelpers)
 target_include_directories(testWorldFixtures PUBLIC .)
 enable_warnings(testWorldFixtures)
 
+add_subdirectory(aiselfplay)
 add_subdirectory(audio)
 # Don't include this test when collecting coverage data
 if(NOT RTTR_ENABLE_COVERAGE)

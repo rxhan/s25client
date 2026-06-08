@@ -110,6 +110,13 @@ public:
 
     unsigned GetGFNumber() const;
     FramesInfo::milliseconds32_t GetGFLength() const { return framesinfo.gf_length; }
+    /// Turbo: Einzelspieler (lokales Spiel) bei Höchstgeschwindigkeit (<=2ms/GF).
+    /// Dann zeichnet die Hauptschleife nur selten, damit die Simulation schnell
+    /// durchläuft (sonst deckelt der FPS-Limiter in SwapBuffers die GF-Rate).
+    bool IsTurboMode() const
+    {
+        return clientconfig.servertyp == ServerType::Local && framesinfo.gf_length <= FramesInfo::milliseconds32_t(2);
+    }
     unsigned GetNWFLength() const { return framesinfo.nwf_length; }
     FramesInfo::milliseconds32_t GetFrameTime() const { return framesinfo.frameTime; }
     unsigned GetGlobalAnimation(unsigned short max, unsigned char factor_numerator, unsigned char factor_denumerator,

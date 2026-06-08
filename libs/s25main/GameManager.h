@@ -47,6 +47,8 @@ private:
         unsigned time, gf;
     };
     boost::optional<SkipReport> lastSkipReport;
+    /// Letzter Zeichen-Zeitpunkt (ms) für die Turbo-Zeichendrosselung.
+    unsigned lastTurboDrawMs_ = 0;
 };
 
 GameManager& getGlobalGameManager();

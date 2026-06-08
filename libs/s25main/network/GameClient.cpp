@@ -1201,8 +1201,12 @@ void GameClient::SetNewSpeed(FramesInfo::milliseconds32_t gfLength)
 {
     static_assert(MIN_SPEED >= SPEED_GF_LENGTHS[GameSpeed::VeryFast], "Not all speeds reachable");
     static_assert(MAX_SPEED <= SPEED_GF_LENGTHS[GameSpeed::VerySlow], "Not all speeds reachable");
+    // Im EINZELSPIELER (lokales Spiel) zusätzlich Turbo bis 1ms/GF erlauben –
+    // praktisch zum schnellen Durchspielen/Testen. (Mehrspieler bleibt bei 10ms,
+    // um Netzwerk-Ruckler/Desyncs zu vermeiden.)
+    const bool allowTurbo = replayMode || DEBUG_MODE || clientconfig.servertyp == ServerType::Local;
     const auto minSpeed = (replayMode || DEBUG_MODE) ? MIN_SPEED_DEBUG : MIN_SPEED;
-    const auto maxSpeed = (replayMode || DEBUG_MODE) ? MAX_SPEED_DEBUG : MAX_SPEED;
+    const auto maxSpeed = allowTurbo ? MAX_SPEED_DEBUG : MAX_SPEED;
     const auto oldSpeed = framesinfo.gfLengthReq;
     framesinfo.gfLengthReq = helpers::clamp<decltype(gfLength)>(gfLength, maxSpeed, minSpeed);
     if(replayMode)
