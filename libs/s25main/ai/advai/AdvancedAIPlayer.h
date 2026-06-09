@@ -58,6 +58,7 @@ private:
     // ---- Reaktive Schicht (AIEvents -> sofortige Reaktion) ----
     void drainEvents();
     void handleEvent(const AIEvent::Base& ev);
+    bool shouldKeepDepletedWoodcutter(MapPoint pos) const;
 
     // ---- Ökonomie ----
     int desiredCount(BuildingType bt) const;

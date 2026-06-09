@@ -214,9 +214,17 @@ void AdvancedAIPlayer::handleEvent(const AIEvent::Base& ev)
         {
             // ErschÃ¶pfte Mine/Quelle abreiÃŸen -> Bauplatz frei, Ersatz planen.
             const auto& b = static_cast<const Building&>(ev);
+            const BuildingType bt = b.GetBuildingType();
+            if(!aii.IsObjectTypeOnNode(b.GetPos(), NodalObjectType::Building))
+                break;
+            if(bt == BuildingType::Woodcutter && shouldKeepDepletedWoodcutter(b.GetPos()))
+            {
+                reactEconomy_ = true;
+                break;
+            }
             // Leergefischten Ort MERKEN: Fische regenerieren sich nicht -> hier (und
             // in Arbeitsradius-NÃ¤he) keine neue FischerhÃ¼tte mehr bauen.
-            if(b.GetBuildingType() == BuildingType::Fishery)
+            if(bt == BuildingType::Fishery)
                 depletedFishSpots_.push_back(b.GetPos());
             aii.DestroyBuilding(b.GetPos());
             reactEconomy_ = true;
@@ -251,6 +259,33 @@ void AdvancedAIPlayer::handleEvent(const AIEvent::Base& ev)
             // RoadConstruction* -> Polling Ã¼bernimmt
             break;
     }
+}
+
+bool AdvancedAIPlayer::shouldKeepDepletedWoodcutter(MapPoint pos) const
+{
+    constexpr unsigned kWoodcutterKeepRadius = 7;
+
+    bool hasNearbyForester = false;
+    for(const nobUsual* forester : aii.GetBuildings(BuildingType::Forester))
+    {
+        if(gwb.CalcDistance(pos, forester->GetPos()) <= kWoodcutterKeepRadius)
+        {
+            hasNearbyForester = true;
+            break;
+        }
+    }
+    if(!hasNearbyForester)
+        return false;
+
+    for(MapPoint pt : collectPoints(pos, kWoodcutterKeepRadius))
+    {
+        if(!aii.IsOwnTerritory(pt))
+            continue;
+        if(aii.GetSurfaceResource(pt) == AISurfaceResource::Wood
+           || aii.GetResourceRating(pt, AIResource::Plantspace) > 0)
+            return true;
+    }
+    return false;
 }
 
 void AdvancedAIPlayer::runInit()
