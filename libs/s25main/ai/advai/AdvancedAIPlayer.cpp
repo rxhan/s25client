@@ -134,6 +134,8 @@ AdvancedAIPlayer::AdvancedAIPlayer(unsigned char playerId, const GameWorldBase& 
 // ===========================================================================
 void AdvancedAIPlayer::RunGF(unsigned gf, bool gfisnwf)
 {
+    currentGF_ = gf;
+
     if(surrendered_)
         return;
 
@@ -217,7 +219,7 @@ void AdvancedAIPlayer::handleEvent(const AIEvent::Base& ev)
             const BuildingType bt = b.GetBuildingType();
             if(!aii.IsObjectTypeOnNode(b.GetPos(), NodalObjectType::Building))
                 break;
-            if(bt == BuildingType::Woodcutter && shouldKeepDepletedWoodcutter(b.GetPos()))
+            if(bt == BuildingType::Woodcutter && !shouldDestroyDepletedWoodcutter(b.GetPos()))
             {
                 reactEconomy_ = true;
                 break;
@@ -227,12 +229,16 @@ void AdvancedAIPlayer::handleEvent(const AIEvent::Base& ev)
             if(bt == BuildingType::Fishery)
                 depletedFishSpots_.push_back(b.GetPos());
             aii.DestroyBuilding(b.GetPos());
+            if(bt == BuildingType::Woodcutter)
+                forgetDepletedWoodcutter(b.GetPos());
             reactEconomy_ = true;
             break;
         }
         case EventType::BuildingDestroyed:
         case EventType::BuildingLost:
         case EventType::LostLand:
+            if(static_cast<const Building&>(ev).GetBuildingType() == BuildingType::Woodcutter)
+                forgetDepletedWoodcutter(static_cast<const Building&>(ev).GetPos());
             // Verlust an der Grenze / zerstÃ¶rte Kette -> nachbauen & verstÃ¤rken.
             reactExpansion_ = true;
             reactEconomy_ = true;
@@ -286,6 +292,35 @@ bool AdvancedAIPlayer::shouldKeepDepletedWoodcutter(MapPoint pos) const
             return true;
     }
     return false;
+}
+
+bool AdvancedAIPlayer::shouldDestroyDepletedWoodcutter(MapPoint pos)
+{
+    constexpr unsigned kWoodcutterIdleHysteresis = 2000;
+
+    if(shouldKeepDepletedWoodcutter(pos))
+    {
+        forgetDepletedWoodcutter(pos);
+        return false;
+    }
+
+    auto it = std::find_if(depletedWoodcutters_.begin(), depletedWoodcutters_.end(),
+                           [pos](const DepletedWoodcutter& entry) { return entry.pos == pos; });
+    if(it == depletedWoodcutters_.end())
+    {
+        depletedWoodcutters_.push_back({pos, currentGF_});
+        return false;
+    }
+
+    return currentGF_ - it->firstGF >= kWoodcutterIdleHysteresis;
+}
+
+void AdvancedAIPlayer::forgetDepletedWoodcutter(MapPoint pos)
+{
+    depletedWoodcutters_.erase(
+      std::remove_if(depletedWoodcutters_.begin(), depletedWoodcutters_.end(),
+                     [pos](const DepletedWoodcutter& entry) { return entry.pos == pos; }),
+      depletedWoodcutters_.end());
 }
 
 void AdvancedAIPlayer::runInit()
@@ -618,6 +653,48 @@ int AdvancedAIPlayer::scorePlacement(BuildingType bt, MapPoint pt, MapPoint cent
     return P.placeDistanceBase - dist;
 }
 
+int AdvancedAIPlayer::countForesterPlantSpots(MapPoint foresterPos, MapPoint blockedBuildingPos) const
+{
+    constexpr unsigned kForesterPlantRadius = 7;
+
+    const bool hasBlockedBuilding = blockedBuildingPos.isValid();
+    const MapPoint blockedFlag =
+      hasBlockedBuilding ? gwb.GetNeighbour(blockedBuildingPos, Direction::SouthEast) : MapPoint::Invalid();
+
+    int spots = 0;
+    for(MapPoint pt : collectPoints(foresterPos, kForesterPlantRadius))
+    {
+        if(!aii.IsOwnTerritory(pt))
+            continue;
+        if(hasBlockedBuilding && (pt == blockedBuildingPos || pt == blockedFlag))
+            continue;
+        if(aii.GetResourceRating(pt, AIResource::Plantspace) > 0)
+            ++spots;
+    }
+    return spots;
+}
+
+bool AdvancedAIPlayer::preservesForesterPlantReserve(MapPoint pt) const
+{
+    constexpr unsigned kForesterPlantRadius = 7;
+    constexpr int kMinForesterPlantSpots = 10;
+
+    for(const nobUsual* forester : aii.GetBuildings(BuildingType::Forester))
+    {
+        if(gwb.CalcDistance(pt, forester->GetPos()) <= kForesterPlantRadius
+           && countForesterPlantSpots(forester->GetPos(), pt) < kMinForesterPlantSpots)
+            return false;
+    }
+    for(const noBuildingSite* site : aii.GetBuildingSites())
+    {
+        if(site->GetBuildingType() == BuildingType::Forester
+           && gwb.CalcDistance(pt, site->GetPos()) <= kForesterPlantRadius
+           && countForesterPlantSpots(site->GetPos(), pt) < kMinForesterPlantSpots)
+            return false;
+    }
+    return true;
+}
+
 bool AdvancedAIPlayer::placementAllowed(BuildingType bt, MapPoint pt) const
 {
     // Ist ein GebÃ¤ude vom Typ t (fertig ODER Baustelle) im Radius rad?
@@ -634,6 +711,8 @@ bool AdvancedAIPlayer::placementAllowed(BuildingType bt, MapPoint pt) const
     // FELD-SCHUTZ: kein anderes GebÃ¤ude in den Arbeitsradius (2) eines Hofs setzen,
     // sonst werden die Felder zugebaut und der Hof unproduktiv.
     if(bt != BuildingType::Farm && nearType(BuildingType::Farm, 2))
+        return false;
+    if(!preservesForesterPlantReserve(pt))
         return false;
 
     switch(bt)
@@ -655,7 +734,7 @@ bool AdvancedAIPlayer::placementAllowed(BuildingType bt, MapPoint pt) const
         }
         case BuildingType::Forester:
             // FÃ¶rster nicht direkt an BauernhÃ¶fe (Feld-/Baum-Konflikt).
-            return !nearType(BuildingType::Farm, 6);
+            return !nearType(BuildingType::Farm, 6) && countForesterPlantSpots(pt, pt) >= 10;
         case BuildingType::Fishery:
         {
             // Fische regenerieren sich NICHT: keine neue FischerhÃ¼tte in NÃ¤he eines

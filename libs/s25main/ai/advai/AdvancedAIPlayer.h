@@ -59,6 +59,8 @@ private:
     void drainEvents();
     void handleEvent(const AIEvent::Base& ev);
     bool shouldKeepDepletedWoodcutter(MapPoint pos) const;
+    bool shouldDestroyDepletedWoodcutter(MapPoint pos);
+    void forgetDepletedWoodcutter(MapPoint pos);
 
     // ---- Ökonomie ----
     int desiredCount(BuildingType bt) const;
@@ -86,6 +88,8 @@ private:
     /// Typ-spezifische Platz-Eignung (Abstand/Freiraum), v.a. für Bauernhöfe
     /// (brauchen offene Felder) und Förster (nicht an Höfe).
     bool placementAllowed(BuildingType bt, MapPoint pt) const;
+    int countForesterPlantSpots(MapPoint foresterPos, MapPoint blockedBuildingPos = MapPoint::Invalid()) const;
+    bool preservesForesterPlantReserve(MapPoint pt) const;
 
     // ---- Aufgeschobene Anbindung (korrekte Reihenfolge!) ----
     // Gebäude werden zuerst platziert; die Straße wird ERST gebaut, wenn die
@@ -165,11 +169,18 @@ private:
     // ---- Zustand ----
     bool initialized_ = false;
     bool surrendered_ = false;
+    unsigned currentGF_ = 0;
     /// Aktuelles Beförderungs-Gebäude (Gold-Upgrade). Invalid = keines.
     MapPoint upgradeBldPos_ = MapPoint::Invalid();
     /// Orte erschöpfter Fischgründe (Fische regenerieren sich nicht!). Hier bzw. in
     /// Arbeitsradius-Nähe wird KEINE neue Fischerhütte mehr gebaut.
     std::vector<MapPoint> depletedFishSpots_;
+    struct DepletedWoodcutter
+    {
+        MapPoint pos;
+        unsigned firstGF = 0;
+    };
+    std::vector<DepletedWoodcutter> depletedWoodcutters_;
     /// Sperre (in settingsInterval-Takten) nach dem Bau eines Upgrade-Turms, bis er
     /// fertig ist und das Territorium ihn zum Inland macht – kein Doppelbau.
     int upgradeBuildCd_ = 0;
