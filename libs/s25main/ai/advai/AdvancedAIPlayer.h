@@ -21,6 +21,7 @@
 #include "gameTypes/GoodTypes.h"
 #include "gameTypes/JobTypes.h"
 #include "gameTypes/MapCoordinates.h"
+#include "helpers/EnumArray.h"
 #include <string>
 #include <vector>
 
@@ -65,6 +66,8 @@ private:
     // ---- Ökonomie ----
     int desiredCount(BuildingType bt) const;
     bool buildBuilding(BuildingType bt);
+    helpers::EnumArray<int, Tool> calculateToolDemand() const;
+    int totalToolPressure() const;
     /// Zulieferer-Gebäudetypen einer Produktionsstufe (für räumliche Nähe):
     /// das Gebäude wird bevorzugt NAHE seiner Vorstufe platziert (kurze Wege).
     std::vector<BuildingType> supplierTypes(BuildingType bt) const;

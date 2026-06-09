@@ -360,6 +360,79 @@ void AdvancedAIPlayer::runEconomy()
     }
 }
 
+helpers::EnumArray<int, Tool> AdvancedAIPlayer::calculateToolDemand() const
+{
+    helpers::EnumArray<int, Tool> demand{};
+    for(const Tool t : helpers::enumRange<Tool>())
+    {
+        const GoodType good = TOOL_TO_GOOD[t];
+        int openWorkplaces = 0;
+        int availableWorkers = 0;
+        const int availableTools = stock(good);
+
+        for(const Job job : helpers::enumRange<Job>())
+        {
+            const auto& tool = JOB_CONSTS[job].tool;
+            if(!tool || *tool != good)
+                continue;
+
+            int jobOpenWorkplaces = 0;
+            for(const BuildingType bt : helpers::enumRange<BuildingType>())
+            {
+                if(BLD_WORK_DESC[bt].job != job)
+                    continue;
+                for(const noBuildingSite* site : aii.GetBuildingSites())
+                    if(site->GetBuildingType() == bt)
+                        ++jobOpenWorkplaces;
+                for(const nobUsual* bld : aii.GetBuildings(bt))
+                    if(!bld->GetWorker())
+                        ++jobOpenWorkplaces;
+            }
+
+            openWorkplaces += jobOpenWorkplaces;
+            availableWorkers += stock(job);
+        }
+
+        demand[t] = std::max(0, openWorkplaces - availableWorkers - availableTools);
+    }
+
+    if(stock(GoodType::Saw) + stock(Job::Carpenter) < 2)
+        demand[Tool::Saw] = std::max(demand[Tool::Saw], 2 - stock(GoodType::Saw) - stock(Job::Carpenter));
+    if(stock(GoodType::Axe) + stock(Job::Woodcutter) < 2)
+        demand[Tool::Axe] = std::max(demand[Tool::Axe], 2 - stock(GoodType::Axe) - stock(Job::Woodcutter));
+    if(stock(GoodType::PickAxe) + stock(Job::Stonemason) < 2)
+        demand[Tool::PickAxe] =
+          std::max(demand[Tool::PickAxe], 2 - stock(GoodType::PickAxe) - stock(Job::Stonemason));
+
+    const int constructionSites = static_cast<int>(aii.GetBuildingSites().size());
+    demand[Tool::Hammer] =
+      std::max(demand[Tool::Hammer], constructionSites - stock(Job::Builder) - stock(GoodType::Hammer));
+    demand[Tool::Shovel] =
+      std::max(demand[Tool::Shovel], constructionSites - stock(Job::Planer) - stock(GoodType::Shovel));
+
+    if(stock(GoodType::Hammer) == 0)
+        demand[Tool::Hammer] = std::max(demand[Tool::Hammer], 1);
+    if(stock(GoodType::Shovel) == 0)
+        demand[Tool::Shovel] = std::max(demand[Tool::Shovel], 1);
+    if(stock(GoodType::Tongs) == 0 && anyMine())
+        demand[Tool::Tongs] = std::max(demand[Tool::Tongs], 1);
+    return demand;
+}
+
+int AdvancedAIPlayer::totalToolPressure() const
+{
+    const auto demand = calculateToolDemand();
+    int pressure = 0;
+    for(const Tool t : helpers::enumRange<Tool>())
+    {
+        int queued = 0;
+        if(ggs.isEnabled(AddonId::TOOL_ORDERING))
+            queued = static_cast<int>(player.GetToolsOrderedVisual(t));
+        pressure += std::max(demand[t], queued);
+    }
+    return pressure;
+}
+
 int AdvancedAIPlayer::desiredCount(BuildingType bt) const
 {
     const int mil = numMilitary();
@@ -470,7 +543,15 @@ int AdvancedAIPlayer::desiredCount(BuildingType bt) const
         // flieÃŸt. So bleibt es im VerhÃ¤ltnis (~1 Verbraucher je Schmelze) statt
         // 10 Schmieden bei 2 Schmelzen.
         case BuildingType::Metalworks: // Schlosserei (Werkzeug)
-            return total(BuildingType::Ironsmelter) > 0 ? std::max(1, total(BuildingType::Ironsmelter) / 2) : 0;
+        {
+            const int pressure = totalToolPressure();
+            const int smelters = total(BuildingType::Ironsmelter);
+            if(pressure <= 0 || (smelters == 0 && stock(GoodType::Iron) < 8))
+                return 0;
+            const int ironLimited = smelters > 0 ? std::max(1, (smelters + 1) / 2) : 1;
+            const int queueLimited = pressure >= 8 ? 1 + (pressure - 8) / 8 : 1;
+            return std::min(ironLimited, queueLimited);
+        }
         case BuildingType::Armory: // Waffenschmiede
             return total(BuildingType::Ironsmelter) > 0 ? std::max(1, total(BuildingType::Ironsmelter) / 2) : 0;
         case BuildingType::Mint: return total(BuildingType::GoldMine) > 0 ? 1 : 0;
@@ -1776,67 +1857,37 @@ void AdvancedAIPlayer::manageRecruitWarehouse()
 
 void AdvancedAIPlayer::adjustToolProduction()
 {
-    if(total(BuildingType::Metalworks) == 0)
-        return; // ohne Schlosserei nichts zu steuern
-
     // Die WIRTSCHAFTLICH ESSENZIELLEN Werkzeuge (fÃ¼r Holz/Bretter/Stein/Nahrung/Bau).
     // Nur diese â€“ die seltenen wÃ¼rden den EINEN Schlosser verzetteln.
     ToolSettings ts{};
     helpers::EnumArray<int8_t, Tool> orderDelta{};
     bool anyOrder = false;
 
-    helpers::EnumArray<int, Tool> demand{};
+    const auto demand = calculateToolDemand();
+    int toolPressure = 0;
+    int basicToolPressure = 0;
     for(const Tool t : helpers::enumRange<Tool>())
     {
-        const GoodType good = TOOL_TO_GOOD[t];
-        int openWorkplaces = 0;
-        int availableWorkers = 0;
-        const int availableTools = stock(good);
-
-        for(const Job job : helpers::enumRange<Job>())
-        {
-            const auto& tool = JOB_CONSTS[job].tool;
-            if(!tool || *tool != good)
-                continue;
-
-            int jobOpenWorkplaces = 0;
-            for(const BuildingType bt : helpers::enumRange<BuildingType>())
-            {
-                if(BLD_WORK_DESC[bt].job != job)
-                    continue;
-                for(const noBuildingSite* site : aii.GetBuildingSites())
-                    if(site->GetBuildingType() == bt)
-                        ++jobOpenWorkplaces;
-                for(const nobUsual* bld : aii.GetBuildings(bt))
-                    if(!bld->GetWorker())
-                        ++jobOpenWorkplaces;
-            }
-
-            openWorkplaces += jobOpenWorkplaces;
-            availableWorkers += stock(job);
-        }
-
-        demand[t] = std::max(0, openWorkplaces - availableWorkers - availableTools);
+        int queued = 0;
+        if(ggs.isEnabled(AddonId::TOOL_ORDERING))
+            queued = static_cast<int>(player.GetToolsOrderedVisual(t));
+        const int pressure = std::max(demand[t], queued);
+        toolPressure += pressure;
+        if(t == Tool::Saw || t == Tool::Axe || t == Tool::PickAxe || t == Tool::Hammer || t == Tool::Shovel
+           || t == Tool::Tongs)
+            basicToolPressure += pressure;
     }
 
-    if(stock(GoodType::Saw) + stock(Job::Carpenter) < 2)
-        demand[Tool::Saw] = std::max(demand[Tool::Saw], 2 - stock(GoodType::Saw) - stock(Job::Carpenter));
-    if(stock(GoodType::Axe) + stock(Job::Woodcutter) < 2)
-        demand[Tool::Axe] = std::max(demand[Tool::Axe], 2 - stock(GoodType::Axe) - stock(Job::Woodcutter));
-    if(stock(GoodType::PickAxe) + stock(Job::Stonemason) < 2)
-        demand[Tool::PickAxe] =
-          std::max(demand[Tool::PickAxe], 2 - stock(GoodType::PickAxe) - stock(Job::Stonemason));
-    const int constructionSites = static_cast<int>(aii.GetBuildingSites().size());
-    demand[Tool::Hammer] =
-      std::max(demand[Tool::Hammer], constructionSites - stock(Job::Builder) - stock(GoodType::Hammer));
-    demand[Tool::Shovel] =
-      std::max(demand[Tool::Shovel], constructionSites - stock(Job::Planer) - stock(GoodType::Shovel));
-    if(stock(GoodType::Hammer) == 0)
-        demand[Tool::Hammer] = std::max(demand[Tool::Hammer], 1);
-    if(stock(GoodType::Shovel) == 0)
-        demand[Tool::Shovel] = std::max(demand[Tool::Shovel], 1);
-    if(stock(GoodType::Tongs) == 0 && anyMine())
-        demand[Tool::Tongs] = std::max(demand[Tool::Tongs], 1);
+    const bool canProduceToolsSoon = total(BuildingType::Metalworks) > 0 || desiredCount(BuildingType::Metalworks) > 0;
+    const bool pauseArmoriesForTools =
+      canProduceToolsSoon && toolPressure >= 8 && basicToolPressure >= 4 && stock(GoodType::Iron) < 8;
+    for(const nobUsual* armory : aii.GetBuildings(BuildingType::Armory))
+    {
+        const bool disabled = armory->IsProductionDisabledVirtual();
+        if(disabled == pauseArmoriesForTools)
+            continue;
+        aii.SetProductionEnabled(armory->GetPos(), !pauseArmoriesForTools);
+    }
 
     if(ggs.isEnabled(AddonId::TOOL_ORDERING))
     {
