@@ -28,12 +28,14 @@
 #include "gameTypes/Direction.h"
 #include "gameTypes/Inventory.h"
 #include "buildings/noBuildingSite.h"
+#include "figures/nofCarrier.h"
 #include "notifications/BuildingNote.h"
 #include "notifications/ExpeditionNote.h"
 #include "notifications/NotificationManager.h"
 #include "notifications/ResourceNote.h"
 #include "notifications/RoadNote.h"
 #include "notifications/ShipNote.h"
+#include "pathfinding/RoadPathFinder.h"
 #include "world/GameWorldBase.h"
 #include "GlobalGameSettings.h"
 #include "addons/const_addons.h"
@@ -43,6 +45,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <queue>
 #include <utility>
@@ -902,6 +905,8 @@ void AdvancedAIPlayer::runRoadOptimize()
             ++built;
     if(built > 0 && std::getenv("RTTR_AI_DEBUG"))
         std::cerr << "[roadOpt] shortcuts=" << built << " topWares=" << flags.front()->GetNumWares() << "\n";
+    if(built == 0)
+        pruneLongUnusedRoadDetour();
 
     // --- Stark frequentierte, langsame Wege zu ESELSTRASSEN aufwerten ---
     // Nur mit Addon MANUAL_ROAD_ENLARGEMENT (sonst werten sich Wege automatisch auf)
@@ -970,6 +975,65 @@ bool AdvancedAIPlayer::pruneDeadRoadBranch(const noFlag& startFlag, Direction ex
     aii.DestroyFlag(&startFlag);
     pruneDeadRoadBranch(*otherFlag, reverseDir, true);
     return true;
+}
+
+bool AdvancedAIPlayer::pruneLongUnusedRoadDetour()
+{
+    auto carrierBusy = [](const nofCarrier* carrier) {
+        if(!carrier)
+            return false;
+        switch(carrier->GetCarrierState())
+        {
+            case CarrierState::WaitForWare:
+            case CarrierState::GotoMiddleOfRoad: return false;
+            default: return true;
+        }
+    };
+
+    const MapExtent sz = gwb.GetSize();
+    for(unsigned y = 0; y < static_cast<unsigned>(sz.y); ++y)
+        for(unsigned x = 0; x < static_cast<unsigned>(sz.x); ++x)
+        {
+            const noFlag* start = gwb.GetSpecObj<noFlag>(MapPoint(x, y));
+            if(!start || start->GetPlayer() != playerId)
+                continue;
+
+            for(const Direction dir : helpers::enumRange<Direction>())
+            {
+                const RoadSegment* rs = start->GetRoute(dir);
+                if(!rs || rs->GetRoadType() != RoadType::Normal)
+                    continue;
+                if(rs->GetLength() < 8)
+                    continue;
+
+                const noFlag* f1 = dynamic_cast<const noFlag*>(rs->GetF1());
+                const noFlag* f2 = dynamic_cast<const noFlag*>(rs->GetF2());
+                if(!f1 || !f2 || f1->GetPlayer() != playerId || f2->GetPlayer() != playerId)
+                    continue;
+
+                const Direction f1Dir = rs->GetRoute(0);
+                const Direction f2Dir = rs->GetRoute(rs->GetLength() - 1) + 3u;
+                if(f1->GetNumWaresForRoad(f1Dir) > 0 || f2->GetNumWaresForRoad(f2Dir) > 0)
+                    continue;
+                if(carrierBusy(rs->getCarrier(0)) || carrierBusy(rs->getCarrier(1)))
+                    continue;
+
+                unsigned altLen = 0;
+                if(!gwb.GetRoadPathFinder().FindPath(*f1, *f2, false, std::numeric_limits<unsigned>::max(), rs,
+                                                      &altLen))
+                    continue;
+                if(altLen + 4 >= rs->GetLength())
+                    continue;
+                if(altLen * 3 > rs->GetLength() * 2)
+                    continue;
+
+                aii.DestroyRoad(start->GetPos(), dir);
+                if(std::getenv("RTTR_AI_DEBUG"))
+                    std::cerr << "[roadOpt] pruneDetour len=" << rs->GetLength() << " alt=" << altLen << "\n";
+                return true;
+            }
+        }
+    return false;
 }
 
 bool AdvancedAIPlayer::buildShortcutFrom(MapPoint fromFlag)

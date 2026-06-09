@@ -103,6 +103,7 @@ private:
     /// On-Road-Umweg deutlich länger ist als eine neue direkte Straße.
     void runRoadOptimize();
     bool pruneDeadRoadBranch(const noFlag& startFlag, Direction excludeDir, bool hasExclude);
+    bool pruneLongUnusedRoadDetour();
     /// Versucht von 'fromFlag' eine lohnende Abkürzung zu einer nahen,
     /// angebundenen Fahne zu bauen (Umweg >> Neubaulänge). true bei Bau.
     bool buildShortcutFrom(MapPoint fromFlag);
