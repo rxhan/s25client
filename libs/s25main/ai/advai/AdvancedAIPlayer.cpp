@@ -20,6 +20,8 @@
 #include "nodeObjs/noFlag.h"
 #include "nodeObjs/noSign.h"
 #include "gameData/BuildingProperties.h"
+#include "gameData/BuildingConsts.h"
+#include "gameData/JobConsts.h"
 #include "gameData/MilitaryConsts.h"
 #include "gameData/ToolConsts.h"
 #include "helpers/EnumRange.h"
@@ -1779,12 +1781,62 @@ void AdvancedAIPlayer::adjustToolProduction()
 
     // Die WIRTSCHAFTLICH ESSENZIELLEN Werkzeuge (fÃ¼r Holz/Bretter/Stein/Nahrung/Bau).
     // Nur diese â€“ die seltenen wÃ¼rden den EINEN Schlosser verzetteln.
-    static const Tool kEssential[] = {Tool::Saw,   Tool::Axe,        Tool::PickAxe, Tool::Hammer,
-                                      Tool::Scythe, Tool::RodAndLine, Tool::Shovel};
-
     ToolSettings ts{};
     helpers::EnumArray<int8_t, Tool> orderDelta{};
     bool anyOrder = false;
+
+    helpers::EnumArray<int, Tool> demand{};
+    for(const Tool t : helpers::enumRange<Tool>())
+    {
+        const GoodType good = TOOL_TO_GOOD[t];
+        int openWorkplaces = 0;
+        int availableWorkers = 0;
+        const int availableTools = stock(good);
+
+        for(const Job job : helpers::enumRange<Job>())
+        {
+            const auto& tool = JOB_CONSTS[job].tool;
+            if(!tool || *tool != good)
+                continue;
+
+            int jobOpenWorkplaces = 0;
+            for(const BuildingType bt : helpers::enumRange<BuildingType>())
+            {
+                if(BLD_WORK_DESC[bt].job != job)
+                    continue;
+                for(const noBuildingSite* site : aii.GetBuildingSites())
+                    if(site->GetBuildingType() == bt)
+                        ++jobOpenWorkplaces;
+                for(const nobUsual* bld : aii.GetBuildings(bt))
+                    if(!bld->GetWorker())
+                        ++jobOpenWorkplaces;
+            }
+
+            openWorkplaces += jobOpenWorkplaces;
+            availableWorkers += stock(job);
+        }
+
+        demand[t] = std::max(0, openWorkplaces - availableWorkers - availableTools);
+    }
+
+    if(stock(GoodType::Saw) + stock(Job::Carpenter) < 2)
+        demand[Tool::Saw] = std::max(demand[Tool::Saw], 2 - stock(GoodType::Saw) - stock(Job::Carpenter));
+    if(stock(GoodType::Axe) + stock(Job::Woodcutter) < 2)
+        demand[Tool::Axe] = std::max(demand[Tool::Axe], 2 - stock(GoodType::Axe) - stock(Job::Woodcutter));
+    if(stock(GoodType::PickAxe) + stock(Job::Stonemason) < 2)
+        demand[Tool::PickAxe] =
+          std::max(demand[Tool::PickAxe], 2 - stock(GoodType::PickAxe) - stock(Job::Stonemason));
+    const int constructionSites = static_cast<int>(aii.GetBuildingSites().size());
+    demand[Tool::Hammer] =
+      std::max(demand[Tool::Hammer], constructionSites - stock(Job::Builder) - stock(GoodType::Hammer));
+    demand[Tool::Shovel] =
+      std::max(demand[Tool::Shovel], constructionSites - stock(Job::Planer) - stock(GoodType::Shovel));
+    if(stock(GoodType::Hammer) == 0)
+        demand[Tool::Hammer] = std::max(demand[Tool::Hammer], 1);
+    if(stock(GoodType::Shovel) == 0)
+        demand[Tool::Shovel] = std::max(demand[Tool::Shovel], 1);
+    if(stock(GoodType::Tongs) == 0 && anyMine())
+        demand[Tool::Tongs] = std::max(demand[Tool::Tongs], 1);
 
     if(ggs.isEnabled(AddonId::TOOL_ORDERING))
     {
@@ -1793,11 +1845,9 @@ void AdvancedAIPlayer::adjustToolProduction()
         // AUS. Ist nichts offen, steht die Schlosserei -> kein Eisenverbrauch, das
         // Eisen steht der Schmiede (Waffen) zur VerfÃ¼gung â€“ genau das gewÃ¼nschte
         // Verhalten (gezielter Werkzeug-Nachschub statt Dauerproduktion).
-        constexpr int kBuf = 4; // kleiner einsatzbereiter Vorrat je Werkzeug
-        for(const Tool t : kEssential)
+        for(const Tool t : helpers::enumRange<Tool>())
         {
-            const int want = std::max(0, kBuf - stock(TOOL_TO_GOOD[t]));
-            int d = want - static_cast<int>(player.GetToolsOrderedVisual(t));
+            int d = demand[t] - static_cast<int>(player.GetToolsOrderedVisual(t));
             d = std::max(-100, std::min(100, d));
             if(d != 0)
             {
@@ -1814,8 +1864,8 @@ void AdvancedAIPlayer::adjustToolProduction()
         // Werkzeug -> langsamere Arbeiterstellung -> Einbruch; der Eisen-Vorteil fÃ¼r
         // die Schmiede wiegt das nicht auf, ~-15 parity auf ALASKA). Daher hier die
         // robuste Dauerproduktion; das Spar-Verhalten gibt es bewusst nur mit Addon.
-        for(const Tool t : kEssential)
-            ts[t] = 1;
+        for(const Tool t : helpers::enumRange<Tool>())
+            ts[t] = static_cast<uint8_t>(std::min(10, demand[t] > 0 ? 2 + demand[t] * 2 : 0));
     }
 
     // Nur senden, wenn sich Einstellungen ODER Bestellungen Ã¤ndern (kein GC-Spam).
