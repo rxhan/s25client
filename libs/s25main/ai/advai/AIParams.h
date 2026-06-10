@@ -43,6 +43,16 @@ struct AIParams
     int placeResourceWeight = 15; // optimiert
     int placeDistanceBase = 253;  // optimiert
 
+    // Holz-Ökonomie (karten-skalierter Ausbau der Holzkette).
+    // Vor dem ersten Bau wird die verfügbare Waldfläche geprüft (surveyWoodResources);
+    // auf normalen Karten wird die Kette in Einheiten (1 Säge + 2 Holzfäller + 1 Förster)
+    // bis zur verfügbaren Fläche hochgezogen. "Sehr kleine" Karten bleiben genügsam
+    // (dort ist der Güterdurchsatz der Engpass, s. ITERATION-BEFUNDE).
+    int woodChainScaling = 1;      // 1 = karten-skalierte Holzkette an (Default), 0 = altes Verhalten (für A/B-Messung)
+    int woodMaxUnits = 3;          // max. Holzketten-Einheiten (je 2 Holzfäller / 1 Förster / 1 Säge)
+    int foresterPlantReserve = 14; // geforderte freie Pflanzplätze je Förster (vorher fix 10)
+    int smallMapArea = 4096;       // Karten mit Fläche x*y < diesem Wert gelten als "sehr klein"
+
     // Militär-Schieberegler (8 Werte). Maxima lt. MILITARY_SETTINGS_SCALE:
     // {10,5,5,5,8,8,8,8}. Alle 8 optimiert; [4]=Inland klein (Auslagerung an Front),
     // [7]=Grenze voll. [0]Rekrut [1]VerteidStärke [2]aktiveVert [3]Angriff
@@ -126,6 +136,10 @@ private:
         getI("attackFractionPct", p.attackFractionPct);
         getI("placeResourceWeight", p.placeResourceWeight);
         getI("placeDistanceBase", p.placeDistanceBase);
+        getI("woodChainScaling", p.woodChainScaling);
+        getI("woodMaxUnits", p.woodMaxUnits);
+        getI("foresterPlantReserve", p.foresterPlantReserve);
+        getI("smallMapArea", p.smallMapArea);
         for(int i = 0; i < 8; ++i)
             getI(("mil" + std::to_string(i)).c_str(), p.milSettings[i]);
         return p;

@@ -35,6 +35,16 @@ BOOST_AUTO_TEST_CASE(ParsingAIJH)
     BOOST_TEST(aiInfos[2].type == AI::Type::Default);
 }
 
+BOOST_AUTO_TEST_CASE(ParsingAdvAI)
+{
+    std::vector<std::string> options = {"advai", "AdvAI", "ADVAI"};
+    std::vector<AI::Info> aiInfos = ParseAIOptions(options);
+    BOOST_TEST_REQUIRE(aiInfos.size() == 3u);
+    BOOST_TEST(aiInfos[0].type == AI::Type::Advanced);
+    BOOST_TEST(aiInfos[1].type == AI::Type::Advanced);
+    BOOST_TEST(aiInfos[2].type == AI::Type::Advanced);
+}
+
 BOOST_AUTO_TEST_CASE(ParsingDummy)
 {
     std::vector<std::string> options = {"dummy", "Dummy", "DUMMY"};

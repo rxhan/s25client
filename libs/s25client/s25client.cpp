@@ -532,7 +532,7 @@ int main(int argc, char** argv)
     desc.add_options()
         ("help,h", "Show help")
         ("map,m", po::value<std::string>(),"Map to load")
-        ("ai", po::value<std::vector<std::string>>(),"AI player(s) to add")
+        ("ai", po::value<std::vector<std::string>>(),"AI player(s) to add: dummy, aijh, advai")
         ("version", "Show version information and exit")
         ("convert-sounds", "Convert sounds and exit")
         ;

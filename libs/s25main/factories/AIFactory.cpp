@@ -14,10 +14,13 @@ std::unique_ptr<AIPlayer> AIFactory::Create(const AI::Info& aiInfo, unsigned pla
     switch(aiInfo.type)
     {
         case AI::Type::Dummy: return std::make_unique<DummyAI>(playerId, world, aiInfo.level); break;
+        // Pro-Slot wählbar: AdvancedAI gezielt für DIESEN Spieler (z.B. Advanced vs JH).
+        case AI::Type::Advanced: return std::make_unique<advai::AdvancedAIPlayer>(playerId, world, aiInfo.level);
         case AI::Type::Default:
         default:
-            // Opt-in: Mit gesetzter Umgebungsvariable RTTR_USE_ADVAI ersetzt unsere
-            // KI die Standard-KI (AIPlayerJH). Ohne die Variable bleibt alles wie gehabt.
+            // Opt-in (global): Mit gesetzter Umgebungsvariable RTTR_USE_ADVAI ersetzt
+            // unsere KI ALLE Standard-KIs (AIPlayerJH). Für gemischte Partien lieber
+            // den Slot-Typ AI::Type::Advanced verwenden.
             if(std::getenv("RTTR_USE_ADVAI"))
                 return std::make_unique<advai::AdvancedAIPlayer>(playerId, world, aiInfo.level);
             return std::make_unique<AIJH::AIPlayerJH>(playerId, world, aiInfo.level);

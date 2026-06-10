@@ -61,9 +61,12 @@ void GameLobbyController::TogglePlayerState(unsigned playerIdx)
                     {
                         case AI::Level::Easy: aiInfo.level = AI::Level::Medium; break;
                         case AI::Level::Medium: aiInfo.level = AI::Level::Hard; break;
-                        case AI::Level::Hard: aiInfo = AI::Info(AI::Type::Dummy); break;
+                        // Nach "Default (hard)" folgt unsere AdvancedAI (advai),
+                        // dann erst Dummy -> so ist sie pro Slot wählbar.
+                        case AI::Level::Hard: aiInfo = AI::Info(AI::Type::Advanced, AI::Level::Hard); break;
                     }
                     break;
+                case AI::Type::Advanced: aiInfo = AI::Info(AI::Type::Dummy); break;
                 case AI::Type::Dummy: newPs = PlayerState::Locked;
             }
             break;

@@ -327,7 +327,73 @@ void AdvancedAIPlayer::forgetDepletedWoodcutter(MapPoint pos)
 
 void AdvancedAIPlayer::runInit()
 {
+    // Vor dem ersten Bau: prüfen, welche (Holz-)Ressourcen zur Verfügung stehen.
+    surveyWoodResources();
     adjustSettings();
+}
+
+// Erfasst die verfügbare Waldfläche im eigenen Territorium und leitet daraus die
+// karten-skalierte Holzketten-Größe ab. Bewusst günstig (flaches seen-Array statt
+// O(n²)-Dedup), da pro Ökonomie-Takt einmal über die Lager-/Militär-Umkreise läuft.
+void AdvancedAIPlayer::surveyWoodResources()
+{
+    const AIParams& P = AIParams::get();
+    const MapExtent mapSize = gwb.GetSize();
+    const std::size_t area = static_cast<std::size_t>(mapSize.x) * mapSize.y;
+    smallMap_ = area < static_cast<std::size_t>(std::max(0, P.smallMapArea));
+
+    std::vector<char> seen(area, 0);
+    auto toIdx = [&](MapPoint p) {
+        return static_cast<std::size_t>(p.x) + static_cast<std::size_t>(p.y) * mapSize.x;
+    };
+
+    std::vector<MapPoint> centers = warehousePositions();
+    for(const nobMilitary* mb : aii.GetMilitaryBuildings())
+        centers.push_back(mb->GetPos());
+
+    int woodSpots = 0;  // Plätze mit fällbaren Bäumen (Holzfäller)
+    int plantSpots = 0; // Plätze mit Pflanzfläche (Förster)
+    for(MapPoint center : centers)
+    {
+        for(MapPoint pt : collectPoints(center, kSearchRadius))
+        {
+            const std::size_t i = toIdx(pt);
+            if(seen[i])
+                continue;
+            seen[i] = 1;
+            if(!aii.IsOwnTerritory(pt))
+                continue;
+            if(!canUseBq(aii.GetBuildingQuality(pt), BuildingQuality::Hut))
+                continue;
+            if(aii.GetResourceRating(pt, AIResource::Wood) > 0)
+                ++woodSpots;
+            if(aii.GetResourceRating(pt, AIResource::Plantspace) > 0)
+                ++plantSpots;
+        }
+    }
+    woodcutterSpots_ = woodSpots;
+    foresterSpots_ = plantSpots;
+    // Kapazität aus der PFLANZFLÄCHE: Förster pflanzen Bäume nach, also bestimmt die
+    // verfügbare Pflanzfläche (nicht die schon stehenden Bäume – die liegen NIE auf
+    // einem baubaren Feld, daher wäre woodSpots am Bauplatz stets 0) nachhaltig, wie
+    // viele Holzketten-Einheiten (je 2 Holzfäller / 1 Förster / 1 Säge) der Wald
+    // trägt. Skaliert mit dem Wald (Nutzer-Vorgabe), gedeckelt durch woodMaxUnits;
+    // sehr kleine Karten bleiben bei genau 1 Einheit.
+    constexpr int kPlantSpotsPerUnit = 12;
+    const int byCapacity = plantSpots / kPlantSpotsPerUnit;
+    woodUnits_ = smallMap_ ? 1 : std::clamp(byCapacity, 1, std::max(1, P.woodMaxUnits));
+    if(std::getenv("RTTR_AI_DEBUG"))
+    {
+        static int dn = 0;
+        if(dn < 60)
+        {
+            ++dn;
+            std::cerr << "[survey] p=" << static_cast<int>(playerId) << " area=" << area
+                      << " small=" << smallMap_ << " woodSpots=" << woodSpots
+                      << " plantSpots=" << plantSpots << " byCap=" << byCapacity
+                      << " woodUnits=" << woodUnits_ << "\n";
+        }
+    }
 }
 
 // ===========================================================================
@@ -335,6 +401,10 @@ void AdvancedAIPlayer::runInit()
 // ===========================================================================
 void AdvancedAIPlayer::runEconomy()
 {
+    // "Erneut prüfen": verfügbare Holz-Ressourcen vor jeder Bau-Planung neu erfassen
+    // (Territorium wächst -> mehr Wald -> die Holzkette darf weiter wachsen).
+    surveyWoodResources();
+
     // PrioritÃ¤tsreihenfolge: Grundversorgung -> Nahrung -> Metall/Werkzeuge ->
     // MilitÃ¤rgÃ¼ter. Der Deadlock-Schutz steckt in den Bedingungen von
     // desiredCount() (Werkzeug/Nahrung/Bretter werden bei Mangel hochgezogen).
@@ -469,6 +539,22 @@ int AdvancedAIPlayer::desiredCount(BuildingType bt) const
         }
         return n;
     };
+    auto plannedBreweries = [&]() {
+        if(total(BuildingType::Armory) == 0)
+            return 0;
+        const int armoryProductivity = productivePct(BuildingType::Armory);
+        return std::max(1, armoryProductivity / 400);
+    };
+    auto plannedDonkeyBreeders = [&]() {
+        int n = total(BuildingType::DonkeyBreeder);
+        if(total(BuildingType::Mill) == 0 || total(BuildingType::Bakery) == 0)
+            return n;
+        if(ggs.isEnabled(AddonId::MANUAL_ROAD_ENLARGEMENT))
+            n = std::max(n, mil >= 16 ? 2 : 1);
+        else if(stock(GoodType::Grain) >= 25)
+            n = std::max(n, 1);
+        return n;
+    };
 
     switch(bt)
     {
@@ -477,16 +563,32 @@ int AdvancedAIPlayer::desiredCount(BuildingType bt) const
         // Kalibriert an Engine-Arbeitszeiten (JOB_CONSTS): FÃ¶rster-Zyklus ~370,
         // HolzfÃ¤ller ~937 -> 1 FÃ¶rster versorgt ~2 HolzfÃ¤ller. SÃ¤ge (Zimmermann)
         // ~575 -> ~1 SÃ¤ge je 2 HolzfÃ¤ller.
-        case BuildingType::Woodcutter: return 2 + mil / 2;                       // Treiber (Bretter Ã¼berall nÃ¶tig)
-        // 1 FÃ¶rster versorgt 2-3 HolzfÃ¤ller (mind. 2, besser 3). Ein FÃ¶rster pflanzt
-        // schneller, als EIN HolzfÃ¤ller fÃ¤llt -> mehrere HolzfÃ¤ller je FÃ¶rster.
-        case BuildingType::Forester: return wc > 0 ? std::max(1, (wc + 2) / 3) : 0;
+        // Holzfäller = Treiber. Auf normalen Karten zusätzlich KARTEN-SKALIERT: bis
+        // woodUnits_ Einheiten (je 2 Holzfäller) hochziehen, begrenzt durch die real
+        // verfügbare Waldfläche (surveyWoodResources). Der Militär-Term (2+mil/2)
+        // bleibt die Untergrenze (Brettbedarf des Bauens). Sehr kleine Karten bleiben
+        // genügsam (Wege-Durchsatz ist dort der Engpass, s. ITERATION-BEFUNDE).
+        // woodChainScaling=0 -> altes Verhalten (für A/B-Messung der Karten-Skalierung).
+        case BuildingType::Woodcutter:
+            if(AIParams::get().woodChainScaling == 0 || smallMap_)
+                return 2 + mil / 2;
+            return std::max(2 + mil / 2, 2 * woodUnits_);
+        // 1 Förster je 2 Holzfäller (mehr als das frühere ~1:3 -> nachhaltigerer Wald,
+        // s. Nutzer-Vorgabe). Durch die verfügbare Pflanzfläche begrenzt. Sehr kleine
+        // Karten / Skalierung aus: konservatives ~1:3 wie bisher.
+        case BuildingType::Forester:
+            if(wc <= 0)
+                return 0;
+            if(AIParams::get().woodChainScaling == 0 || smallMap_)
+                return std::max(1, (wc + 2) / 3);
+            return std::min(foresterSpots_, std::max(1, (wc + 1) / 2));
         case BuildingType::Sawmill: return std::max(1, (wc + 1) / 2);            // 1 SÃ¤ge : 2 HolzfÃ¤ller
 
         case BuildingType::Quarry: return 2 + mil / 3; // Steine (Platzierung an Steinvorkommen gebunden)
 
         // ====== NAHRUNG / GETREIDE (Wurzel: Farm) ======
-        case BuildingType::Farm: return 1 + mil / 3; // Wurzel der Getreide-/Bier-Kette
+        case BuildingType::Farm:
+            return 1 + mil / 3 + plannedBreweries() + plannedDonkeyBreeders();
         case BuildingType::Mill:
             return std::max(total(BuildingType::Farm) > 0 ? 1 : 0, total(BuildingType::Farm) / 2);
         case BuildingType::Bakery: return total(BuildingType::Mill);                  // 1 BÃ¤cker je MÃ¼hle
@@ -508,9 +610,14 @@ int AdvancedAIPlayer::desiredCount(BuildingType bt) const
             return std::max(1, std::min(grainLimited, armoryLimited));
         }
         case BuildingType::Well:
+        {
+            const int waterConsumers = total(BuildingType::Bakery)
+                                       + std::max(total(BuildingType::Brewery), plannedBreweries())
+                                       + plannedDonkeyBreeders();
             return (total(BuildingType::Farm) > 0 || mines) ?
-                     std::max(1, (total(BuildingType::Bakery) + total(BuildingType::Brewery) + 1) / 2) :
+                     std::max(1, (waterConsumers + 1) / 2) :
                      0;
+        }
         case BuildingType::Fishery: return 1 + mil / 5 + (mines ? 1 : 0) + ((mines && foodStock == 0) ? 1 : 0);
         case BuildingType::Hunter: return 1 + mil / 5; // Basis-Nahrung
 
@@ -580,7 +687,16 @@ int AdvancedAIPlayer::desiredCount(BuildingType bt) const
         case BuildingType::Storehouse:
         {
             const int stores = static_cast<int>(aii.GetStorehouses().size());
-            return (mil >= 4 && stores < 2) || (mil >= 9 && stores < 3) || (mil >= 16 && stores < 4) ? 1 : 0;
+            int blds = mil;
+            for(const BuildingType bldType : helpers::enumRange<BuildingType>())
+                blds += static_cast<int>(aii.GetBuildings(bldType).size());
+            if(stores < 2 && ((mil >= 10 && blds >= 26) || mil >= 14))
+                return 1;
+            if(stores < 3 && ((mil >= 18 && blds >= 42) || mil >= 24))
+                return 1;
+            if(stores < 4 && ((mil >= 28 && blds >= 62) || mil >= 36))
+                return 1;
+            return 0;
         }
         default: return 0;
     }
@@ -596,12 +712,26 @@ bool AdvancedAIPlayer::buildBuilding(BuildingType bt)
     // Platz muss deutlich von vorhandenen Lagern entfernt liegen.
     if(bt == BuildingType::Storehouse)
     {
-        std::vector<MapPoint> milCenters;
+        std::vector<MapPoint> centers;
         for(const nobMilitary* mb : aii.GetMilitaryBuildings())
-            milCenters.push_back(mb->GetPos());
-        if(milCenters.empty())
+            centers.push_back(mb->GetPos());
+        for(const BuildingType bldType : helpers::enumRange<BuildingType>())
+        {
+            if(bldType == BuildingType::Headquarters || bldType == BuildingType::Storehouse
+               || bldType == BuildingType::HarborBuilding)
+                continue;
+            for(const nobUsual* bld : aii.GetBuildings(bldType))
+                centers.push_back(bld->GetPos());
+        }
+        for(const noBuildingSite* site : aii.GetBuildingSites())
+        {
+            const BuildingType siteType = site->GetBuildingType();
+            if(siteType != BuildingType::Storehouse && siteType != BuildingType::HarborBuilding)
+                centers.push_back(site->GetPos());
+        }
+        if(centers.empty())
             return false;
-        return placeNear(bt, milCenters, kSearchRadius, /*minDistToWarehouse=*/6);
+        return placeNear(bt, centers, 18);
     }
 
     // RÃ„UMLICHE NÃ„HE: nachgelagerte GebÃ¤ude bevorzugt NAHE ihrer Vorstufe bauen
@@ -662,10 +792,23 @@ bool AdvancedAIPlayer::placeNear(BuildingType bt, const std::vector<MapPoint>& c
     // sortieren und der Reihe nach versuchen, bis die StraÃŸenanbindung klappt.
     // (Der beste Platz ist oft nicht anbindbar -> sonst scheitert die Platzierung.)
     std::vector<std::pair<int, MapPoint>> cands;
+    const bool dedupeCandidates = bt == BuildingType::Storehouse;
+    const MapExtent mapSize = gwb.GetSize();
+    std::vector<char> seen;
+    if(dedupeCandidates)
+        seen.assign(static_cast<std::size_t>(mapSize.x) * mapSize.y, 0);
+    auto toIdx = [&](MapPoint p) { return static_cast<std::size_t>(p.x) + static_cast<std::size_t>(p.y) * mapSize.x; };
     for(MapPoint center : centers)
     {
         for(MapPoint pt : collectPoints(center, radius))
         {
+            if(dedupeCandidates)
+            {
+                const std::size_t idx = toIdx(pt);
+                if(seen[idx])
+                    continue;
+                seen[idx] = 1;
+            }
             if(!aii.IsOwnTerritory(pt))
                 continue;
             if(!canUseBq(aii.GetBuildingQuality(pt), ci.size))
@@ -712,6 +855,9 @@ bool AdvancedAIPlayer::placeNear(BuildingType bt, const std::vector<MapPoint>& c
 
 int AdvancedAIPlayer::scorePlacement(BuildingType bt, MapPoint pt, MapPoint center) const
 {
+    if(bt == BuildingType::Storehouse)
+        return scoreStorehousePlacement(pt);
+
     const ChainInfo& ci = chainOf(bt);
     const int dist = static_cast<int>(gwb.CalcDistance(pt, center));
 
@@ -734,6 +880,128 @@ int AdvancedAIPlayer::scorePlacement(BuildingType bt, MapPoint pt, MapPoint cent
     }
     // sonst: mÃ¶glichst nah am Lager (kurze Wege, weniger TrÃ¤ger)
     return P.placeDistanceBase - dist;
+}
+
+int AdvancedAIPlayer::countNearbyBuildings(MapPoint pt, unsigned radius) const
+{
+    int n = 0;
+    for(const BuildingType bt : helpers::enumRange<BuildingType>())
+    {
+        if(bt == BuildingType::Headquarters || bt == BuildingType::Storehouse || bt == BuildingType::HarborBuilding)
+            continue;
+        for(const nobUsual* bld : aii.GetBuildings(bt))
+            if(gwb.CalcDistance(pt, bld->GetPos()) <= radius)
+                ++n;
+    }
+    for(const nobMilitary* mb : aii.GetMilitaryBuildings())
+        if(gwb.CalcDistance(pt, mb->GetPos()) <= radius)
+            ++n;
+    for(const noBuildingSite* site : aii.GetBuildingSites())
+    {
+        const BuildingType bt = site->GetBuildingType();
+        if(bt == BuildingType::Storehouse || bt == BuildingType::HarborBuilding)
+            continue;
+        if(gwb.CalcDistance(pt, site->GetPos()) <= radius)
+            ++n;
+    }
+    return n;
+}
+
+int AdvancedAIPlayer::countNearbyOwnTerritory(MapPoint pt, unsigned radius) const
+{
+    int n = 0;
+    for(MapPoint p : collectPoints(pt, radius))
+        if(aii.IsOwnTerritory(p))
+            ++n;
+    return n;
+}
+
+unsigned AdvancedAIPlayer::estimateWarehouseRoadDistance(MapPoint bldPos) const
+{
+    const MapPoint bldFlag = gwb.GetNeighbour(bldPos, Direction::SouthEast);
+    std::vector<Direction> route;
+    MapPoint target = MapPoint::Invalid();
+    bool junction = false;
+    if(!planConnection(bldFlag, route, &target, &junction) || !target.isValid())
+        return std::numeric_limits<unsigned>::max();
+
+    auto nearestWarehouseFlagDistance = [&](const noFlag& fromFlag) {
+        unsigned best = std::numeric_limits<unsigned>::max();
+        for(const nobBaseWarehouse* wh : aii.GetStorehouses())
+        {
+            const noFlag* whFlag = gwb.GetSpecObj<noFlag>(gwb.GetNeighbour(wh->GetPos(), Direction::SouthEast));
+            if(!whFlag)
+                continue;
+            unsigned dist = 0;
+            if(&fromFlag == whFlag)
+                dist = 0;
+            else if(!aii.FindPathOnRoads(fromFlag, *whFlag, &dist))
+                continue;
+            best = std::min(best, dist);
+        }
+        return best;
+    };
+
+    unsigned rest = std::numeric_limits<unsigned>::max();
+    if(const noFlag* targetFlag = gwb.GetSpecObj<noFlag>(target))
+    {
+        if(targetFlag->GetPlayer() == playerId)
+            rest = nearestWarehouseFlagDistance(*targetFlag);
+    } else if(junction)
+    {
+        for(MapPoint pt : collectPoints(target, 10))
+        {
+            const noFlag* flag = gwb.GetSpecObj<noFlag>(pt);
+            if(!flag || flag->GetPlayer() != playerId)
+                continue;
+            const unsigned flagRest = nearestWarehouseFlagDistance(*flag);
+            if(flagRest == std::numeric_limits<unsigned>::max())
+                continue;
+            rest = std::min(rest, flagRest + gwb.CalcDistance(target, pt));
+        }
+    }
+
+    if(rest == std::numeric_limits<unsigned>::max())
+        return rest;
+    return static_cast<unsigned>(route.size()) + rest;
+}
+
+int AdvancedAIPlayer::scoreStorehousePlacement(MapPoint pt) const
+{
+    constexpr unsigned kMinWarehouseRoadDistance = 30;
+    constexpr unsigned kMaxClusterWarehouseRoadDistance = 55;
+    constexpr unsigned kMaxGapWarehouseRoadDistance = 85;
+    constexpr int kIdealWarehouseRoadDistance = 42;
+
+    const int nearBuildings = countNearbyBuildings(pt, 10);
+    const int widerBuildings = countNearbyBuildings(pt, 16);
+    unsigned nearestAir = std::numeric_limits<unsigned>::max();
+    for(const nobBaseWarehouse* wh : aii.GetStorehouses())
+        nearestAir = std::min(nearestAir, gwb.CalcDistance(pt, wh->GetPos()));
+    if(nearestAir < 20)
+        return INT_MIN;
+
+    const unsigned roadDist = estimateWarehouseRoadDistance(pt);
+    if(roadDist == std::numeric_limits<unsigned>::max() || roadDist < kMinWarehouseRoadDistance)
+        return INT_MIN;
+
+    const int dist = static_cast<int>(roadDist);
+    const bool denseCluster = nearBuildings >= 5 && widerBuildings >= 10 && roadDist <= kMaxClusterWarehouseRoadDistance;
+    const int territory = countNearbyOwnTerritory(pt, 18);
+    const bool serviceGap = nearBuildings >= 2 && widerBuildings >= 4 && territory >= 150 && nearestAir >= 28
+                            && roadDist <= kMaxGapWarehouseRoadDistance;
+    if(!denseCluster && !serviceGap)
+        return INT_MIN;
+
+    if(serviceGap && !denseCluster)
+    {
+        const int gapScore = std::min(dist, static_cast<int>(kMaxGapWarehouseRoadDistance)) * 5
+                             - std::max(0, dist - 65) * 8;
+        return gapScore + territory * 3 + nearBuildings * 80 + widerBuildings * 18;
+    }
+
+    const int distanceScore = 260 - std::abs(dist - kIdealWarehouseRoadDistance) * 9;
+    return distanceScore + nearBuildings * 115 + widerBuildings * 22;
 }
 
 int AdvancedAIPlayer::countForesterPlantSpots(MapPoint foresterPos, MapPoint blockedBuildingPos) const
@@ -760,7 +1028,9 @@ int AdvancedAIPlayer::countForesterPlantSpots(MapPoint foresterPos, MapPoint blo
 bool AdvancedAIPlayer::preservesForesterPlantReserve(MapPoint pt) const
 {
     constexpr unsigned kForesterPlantRadius = 7;
-    constexpr int kMinForesterPlantSpots = 10;
+    // Förstern wird mehr Platz zugestanden (Default 14 statt fix 10) -> nachhaltiger
+    // Wald, weniger Leerlauf. Über AIParams::foresterPlantReserve tunebar.
+    const int kMinForesterPlantSpots = std::max(1, AIParams::get().foresterPlantReserve);
 
     for(const nobUsual* forester : aii.GetBuildings(BuildingType::Forester))
     {
@@ -816,8 +1086,10 @@ bool AdvancedAIPlayer::placementAllowed(BuildingType bt, MapPoint pt) const
             return true;
         }
         case BuildingType::Forester:
-            // FÃ¶rster nicht direkt an BauernhÃ¶fe (Feld-/Baum-Konflikt).
-            return !nearType(BuildingType::Farm, 6) && countForesterPlantSpots(pt, pt) >= 10;
+            // FÃ¶rster nicht direkt an BauernhÃ¶fe (Feld-/Baum-Konflikt) und nur mit
+            // genug freier PflanzflÃ¤che ringsum (mehr Platz: foresterPlantReserve).
+            return !nearType(BuildingType::Farm, 6)
+                   && countForesterPlantSpots(pt, pt) >= std::max(1, AIParams::get().foresterPlantReserve);
         case BuildingType::Fishery:
         {
             // Fische regenerieren sich NICHT: keine neue FischerhÃ¼tte in NÃ¤he eines

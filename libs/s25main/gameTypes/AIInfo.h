@@ -22,11 +22,12 @@ constexpr auto maxEnumValue(Level)
 enum class Type : uint8_t
 {
     Dummy,
-    Default
+    Default,
+    Advanced ///< AdvancedAIPlayer (advai) – pro Slot wählbar, spielt gegen Default(JH)
 };
 constexpr auto maxEnumValue(Type)
 {
-    return Type::Default;
+    return Type::Advanced;
 }
 
 struct Info

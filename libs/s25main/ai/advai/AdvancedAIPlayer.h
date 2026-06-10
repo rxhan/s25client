@@ -65,6 +65,11 @@ private:
 
     // ---- Ökonomie ----
     int desiredCount(BuildingType bt) const;
+    /// Prüft die verfügbaren Holz-Ressourcen (Wald/Pflanzfläche) im eigenen
+    /// Territorium und leitet daraus die karten-skalierte Holzketten-Größe ab
+    /// (woodUnits_). Läuft vor dem ersten Bau (runInit) und vor jeder Ökonomie-
+    /// Planung erneut ("erneut prüfen").
+    void surveyWoodResources();
     bool buildBuilding(BuildingType bt);
     helpers::EnumArray<int, Tool> calculateToolDemand() const;
     int totalToolPressure() const;
@@ -88,6 +93,10 @@ private:
     /// Setzt Zwischenfahnen entlang einer frisch gebauten Straße (Abstand ~2).
     void setFlagsAlongRoad(MapPoint startFlag, const std::vector<Direction>& route);
     int scorePlacement(BuildingType bt, MapPoint pt, MapPoint center) const;
+    int scoreStorehousePlacement(MapPoint pt) const;
+    unsigned estimateWarehouseRoadDistance(MapPoint bldPos) const;
+    int countNearbyBuildings(MapPoint pt, unsigned radius) const;
+    int countNearbyOwnTerritory(MapPoint pt, unsigned radius) const;
     /// Typ-spezifische Platz-Eignung (Abstand/Freiraum), v.a. für Bauernhöfe
     /// (brauchen offene Felder) und Förster (nicht an Höfe).
     bool placementAllowed(BuildingType bt, MapPoint pt) const;
@@ -173,6 +182,11 @@ private:
     bool initialized_ = false;
     bool surrendered_ = false;
     unsigned currentGF_ = 0;
+    // ---- Holz-Ressourcen-Survey (vor dem ersten Bau + jeden Ökonomie-Takt neu) ----
+    bool smallMap_ = false;     ///< sehr kleine Karte -> genügsame Holzkette (Wege-Engpass)
+    int woodcutterSpots_ = 0;   ///< baubare Hütten-Plätze mit Wald (Holzfäller-Kapazität)
+    int foresterSpots_ = 0;     ///< baubare Hütten-Plätze mit Pflanzfläche (Förster-Kapazität)
+    int woodUnits_ = 1;         ///< unterstützte Holzketten-Einheiten (1 Säge + 2 Holzfäller + 1 Förster)
     /// Aktuelles Beförderungs-Gebäude (Gold-Upgrade). Invalid = keines.
     MapPoint upgradeBldPos_ = MapPoint::Invalid();
     /// Orte erschöpfter Fischgründe (Fische regenerieren sich nicht!). Hier bzw. in
