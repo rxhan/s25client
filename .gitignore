@@ -16,6 +16,7 @@
 .cache
 /S2
 /build
+/build-tests
 /external/boost*
 /win32/*.aps
 /data/RTTR/languages/*.mo
