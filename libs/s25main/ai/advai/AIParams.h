@@ -38,6 +38,11 @@ struct AIParams
     unsigned milSpacing = 5;     // optimiert
     int attackMinSoldiers = 8;   // optimiert: höhere Angriffsschwelle (weniger riskant)
     int attackFractionPct = 33;  // optimiert: kleinere Angriffswellen
+    // Mindest-Landgewinn (nutzbare, noch nicht eigene Landfelder im Militärradius),
+    // damit ein Expansions-Militärgebäude überhaupt gebaut wird. Verhindert
+    // sinnlose Posten am Wasser-/Gebirgsrand, deren Radius nur Wasser/Felsen
+    // "erobert". 0 = Gate aus (altes Verhalten, für A/B-Messung).
+    int minExpansionLandGain = 12;
 
     // Platzierungs-Scoring
     int placeResourceWeight = 15; // optimiert
@@ -134,6 +139,7 @@ private:
         getI("expandPerTick", p.expandPerTick);
         getI("attackMinSoldiers", p.attackMinSoldiers);
         getI("attackFractionPct", p.attackFractionPct);
+        getI("minExpansionLandGain", p.minExpansionLandGain);
         getI("placeResourceWeight", p.placeResourceWeight);
         getI("placeDistanceBase", p.placeDistanceBase);
         getI("woodChainScaling", p.woodChainScaling);

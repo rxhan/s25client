@@ -1786,6 +1786,29 @@ bool AdvancedAIPlayer::placeMilitary()
                     return radius;
         return 0u;
     };
+    // Militärradius je Bautyp (= gameData MILITARY_RADIUS {8,9,10,11}). Bestimmt,
+    // wie weit ein Gebäude Territorium beansprucht -> Reichweite des Landgewinn-Gates.
+    auto milClaimRadius = [](BuildingType bt) -> unsigned {
+        switch(bt)
+        {
+            case BuildingType::Barracks: return 8;
+            case BuildingType::Guardhouse: return 9;
+            case BuildingType::Watchtower: return 10;
+            case BuildingType::Fortress: return 11;
+            default: return 9;
+        }
+    };
+    // Zählt im Radius die NUTZBAREN, noch nicht eigenen Landfelder: nicht eigenes
+    // Territorium UND bebaubares Terrain (GetBuildingQualityAnyOwner != Nothing ->
+    // schließt Wasser und unbebaubare Felsspitzen aus; Minenberge/Feindland zählen
+    // als nutzbarer Gewinn). So wird "echter Landgewinn" gemessen statt nur "Grenze".
+    auto usableLandGain = [&](MapPoint p, unsigned radius) {
+        int gain = 0;
+        for(MapPoint n : collectPoints(p, radius))
+            if(!aii.IsOwnTerritory(n) && aii.GetBuildingQualityAnyOwner(n) != BuildingQuality::Nothing)
+                ++gain;
+        return gain;
+    };
 
     // RICHTUNGS-BALANCE: Ohne GegenmaÃŸnahme verstÃ¤rkt sich eine zufÃ¤llige
     // Anfangsrichtung (Expansion folgt bestehenden MilitÃ¤rgebÃ¤uden) -> Wachstum
@@ -1824,6 +1847,8 @@ bool AdvancedAIPlayer::placeMilitary()
         if(!aii.CanBuildBuildingtype(bt))
             continue;
         const ChainInfo& ci = chainOf(bt);
+        const unsigned claimR = milClaimRadius(bt);
+        const int minLandGain = AIParams::get().minExpansionLandGain;
 
         // Kandidaten sammeln, nach Score sortieren, der Reihe nach versuchen, bis
         // die Anbindung klappt (analog placeNear).
@@ -1845,6 +1870,11 @@ bool AdvancedAIPlayer::placeMilitary()
                 for(MapPoint mp : milPos)
                     minD = std::min(minD, gwb.CalcDistance(pt, mp));
                 if(minD < wantedSpacing)
+                    continue;
+                // LANDGEWINN-Gate: kein Expansions-Militärgebäude, wenn sein Radius
+                // kaum NUTZBARES neues Land abdeckt (z.B. am Wasser-/Gebirgsrand,
+                // wo nur Wasser/Felsspitzen "erobert" würden). minLandGain=0 -> aus.
+                if(minLandGain > 0 && usableLandGain(pt, claimR) < minLandGain)
                     continue;
                 const int frontier = frontierScore(pt);
                 const int dist = hqPos.isValid() ? static_cast<int>(gwb.CalcDistance(pt, hqPos)) : 0;
